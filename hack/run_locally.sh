@@ -2,6 +2,40 @@
 
 set -eo pipefail
 
+DIR=$(dirname "${BASH_SOURCE[0]}")
+
+CNCC_REPOSITORY=${CNCC_REPOSITORY:-""}
+if [ -z "${CNCC_REPOSITORY}" ]; then
+	echo "Please set environment variable CNCC_REPOSITORY and point it to your container repository"
+	exit 1
+fi
+
+CONTAINER_ENGINE="${CONTAINER_ENGINE:-podman}"
+PODMAN_BIN="podman"
+PODMAN_BUILD_CMD="podman build"
+PODMAN_CMD="podman"
+if [ "$CONTAINER_ENGINE" == "docker" ]; then
+	PODMAN_BIN="docker"
+	PODMAN_BUILD_CMD="docker build"
+	PODMAN_CMD="docker"
+fi
+
+for command in mktemp awk oc uuidgen $PODMAN_BIN; do
+	if ! command -v $command &> /dev/null
+	then
+		echo "$command not found"
+		exit 1
+	fi
+done
+
+UUID=$(uuidgen)
+export CONTROLLER_IMAGE="${CNCC_REPOSITORY}:${UUID}"
+
+pushd $DIR/../
+	$PODMAN_BUILD_CMD -t ${CONTROLLER_IMAGE} .
+	$PODMAN_CMD push ${CONTROLLER_IMAGE}
+popd
+
 for cmd in go jq oc; do
    if ! command -v "$cmd" &> /dev/null; then
       echo "$cmd is not available"

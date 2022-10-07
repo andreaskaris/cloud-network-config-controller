@@ -7,6 +7,8 @@ RUN make build
 FROM registry.ci.openshift.org/ocp/4.12:base
 
 COPY --from=builder /go/src/github.com/openshift/cloud-network-config-controller/_output/bin/cloud-network-config-controller /usr/bin/
+COPY --from=builder /go/src/github.com/openshift/cloud-network-config-controller/_output/bin/cloud-network-config-grpc-server /usr/bin/
+COPY --from=builder /go/src/github.com/openshift/cloud-network-config-controller/_output/bin/cloud-network-config-address-controller /usr/bin/
 
 LABEL io.k8s.display-name="Cloud Network Config Controller" \
       io.k8s.description="Controller performing cloud level network modification" \

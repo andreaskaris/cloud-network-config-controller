@@ -35,6 +35,7 @@ type DaemonSetController struct {
 	daemonsetLister appslisters.DaemonSetLister
 	kubeclientset   kubernetes.Interface
 	namespace       string
+	daemonsetImage  string
 }
 
 // NewDaemonSetController returns a new DaemonSet controller
@@ -42,19 +43,20 @@ func NewDaemonSetController(
 	controllerContext context.Context,
 	kubeclientset kubernetes.Interface,
 	daemonsetInformer appsinformers.DaemonSetInformer,
-	daemonsetNamespace string) *controller.CloudNetworkConfigController {
+	daemonsetNamespace, daemonsetImage string) *controller.CloudNetworkConfigController {
 
 	daemonsetController := &DaemonSetController{
 		daemonsetLister: daemonsetInformer.Lister(),
 		kubeclientset:   kubeclientset,
 		namespace:       daemonsetNamespace,
+		daemonsetImage:  daemonsetImage,
 	}
 
-	if err := daemonsetController.applyDaemonSet(dsdef.WorkerDaemonSet("worker")); err != nil {
+	if err := daemonsetController.applyDaemonSet(dsdef.WorkerDaemonSet("worker", daemonsetNamespace, daemonsetImage)); err != nil {
 		// TODO: fixme
 		panic(err)
 	}
-	if err := daemonsetController.applyDaemonSet(dsdef.ControlPlaneDaemonSet("controlplane")); err != nil {
+	if err := daemonsetController.applyDaemonSet(dsdef.ControlPlaneDaemonSet("controlplane", daemonsetNamespace, daemonsetImage)); err != nil {
 		// TODO: fixme
 		panic(err)
 	}
@@ -115,11 +117,11 @@ func (d *DaemonSetController) SyncHandler(key string) error {
 
 	switch daemonsetName {
 	case "worker":
-		if err := d.applyDaemonSet(dsdef.WorkerDaemonSet(daemonsetName)); err != nil {
+		if err := d.applyDaemonSet(dsdef.WorkerDaemonSet(daemonsetName, d.namespace, d.daemonsetImage)); err != nil {
 			return err
 		}
 	case "controlplane":
-		if err := d.applyDaemonSet(dsdef.ControlPlaneDaemonSet(daemonsetName)); err != nil {
+		if err := d.applyDaemonSet(dsdef.ControlPlaneDaemonSet(daemonsetName, d.namespace, d.daemonsetImage)); err != nil {
 			return err
 		}
 	}
@@ -128,7 +130,9 @@ func (d *DaemonSetController) SyncHandler(key string) error {
 
 func (d *DaemonSetController) applyDaemonSet(daemonset *applyv1.DaemonSetApplyConfiguration) error {
 	if _, err := d.kubeclientset.AppsV1().DaemonSets(d.namespace).Apply(
-		context.TODO(), daemonset, metav1.ApplyOptions{FieldManager: "application/apply-patch"}); err != nil {
+		context.TODO(), daemonset, metav1.ApplyOptions{
+			FieldManager: "application/apply-patch",
+			Force:        true}); err != nil {
 		return err
 	}
 	return nil
