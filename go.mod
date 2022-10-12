@@ -12,6 +12,7 @@ require (
 	github.com/gophercloud/utils v0.0.0-20220307143606-8e7800759d16
 	github.com/openshift/api v0.0.0-20210423140644-156ca80f8d83
 	github.com/openshift/client-go v0.0.0-20210503124028-ac0910aac9fa
+	github.com/vishvananda/netlink v1.1.0
 	google.golang.org/api v0.57.0
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/api v0.25.2
@@ -62,6 +63,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
+	github.com/vishvananda/netns v0.0.0-20191106174202-0a2b9b5464df // indirect
 	go.opencensus.io v0.23.0 // indirect
 	golang.org/x/crypto v0.0.0-20220315160706-3147a52a75dd // indirect
 	golang.org/x/net v0.0.0-20220927171203-f486391704dc // indirect

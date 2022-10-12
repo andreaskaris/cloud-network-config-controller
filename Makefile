@@ -1,6 +1,6 @@
 build:
 	CGO_ENABLED=0 GO111MODULE=on go build -mod vendor -o _output/bin/cloud-network-config-controller cmd/cloud-network-config-controller/main.go
-	CGO_ENABLED=0 GO111MODULE=on go build -mod vendor -o _output/bin/cloud-network-config-grpc-server cmd/cloud-network-config-grpc-server/main.go
+	CGO_ENABLED=0 GO111MODULE=on go build -mod vendor -o _output/bin/cloud-network-config-probe-server cmd/cloud-network-config-probe-server/main.go
 	CGO_ENABLED=0 GO111MODULE=on go build -mod vendor -o _output/bin/cloud-network-config-address-controller cmd/cloud-network-config-address-controller/main.go
 test:
 	# This is commenting out the racy tests. The test file:

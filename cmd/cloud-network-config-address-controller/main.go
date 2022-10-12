@@ -12,6 +12,8 @@ import (
 	cloudnetworkinformers "github.com/openshift/client-go/cloudnetwork/informers/externalversions"
 	cloudprovider "github.com/openshift/cloud-network-config-controller/pkg/cloudprovider"
 	cloudprivateipaddresscontroller "github.com/openshift/cloud-network-config-controller/pkg/controller/cloudprivateipaddress"
+	podaddresscontroller "github.com/openshift/cloud-network-config-controller/pkg/controller/podaddress"
+	"github.com/openshift/cloud-network-config-controller/pkg/ipaddressmonitor"
 	signals "github.com/openshift/cloud-network-config-controller/pkg/signals"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -102,13 +104,25 @@ func main() {
 				kubeInformerFactory := kubeinformers.NewSharedInformerFactoryWithOptions(kubeClient, time.Minute*2, kubeinformers.WithNamespace(controllerNamespace))
 				cloudNetworkInformerFactory := cloudnetworkinformers.NewSharedInformerFactory(cloudNetworkClient, time.Minute*2)
 
+				// Run the IPAddressMonitor.
+				ipAddressMonitor := ipaddressmonitor.NewIPAddressMonitor()
+				go ipAddressMonitor.Run(context.TODO())
+
 				cloudPrivateIPAddressController := cloudprivateipaddresscontroller.NewCloudPrivateIPAddressController(
 					ctx,
 					cloudNetworkClient,
 					cloudNetworkInformerFactory.Cloud().V1().CloudPrivateIPConfigs(),
 					kubeInformerFactory.Core().V1().Nodes(),
+					ipAddressMonitor,
 					controllerNodeName,
 					controllerInterface,
+				)
+				podAddressController := podaddresscontroller.NewPodAddressController(
+					ctx,
+					kubeClient,
+					kubeInformerFactory.Core().V1().Pods(),
+					ipAddressMonitor,
+					controllerNamespace,
 				)
 				cloudNetworkInformerFactory.Start(stopCh)
 				kubeInformerFactory.Start(stopCh)
@@ -118,6 +132,13 @@ func main() {
 					defer wg.Done()
 					if err = cloudPrivateIPAddressController.Run(stopCh); err != nil {
 						klog.Exitf("Error running CloudPrivateIPAddress controller: %s", err.Error())
+					}
+				}()
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if err = podAddressController.Run(stopCh); err != nil {
+						klog.Exitf("Error running PodAddress controller: %s", err.Error())
 					}
 				}()
 			},

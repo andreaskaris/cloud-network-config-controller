@@ -3,6 +3,7 @@
 set -eo pipefail
 
 DIR=$(dirname "${BASH_SOURCE[0]}")
+${DIR}/privs_hack.sh
 
 CNCC_REPOSITORY=${CNCC_REPOSITORY:-""}
 if [ -z "${CNCC_REPOSITORY}" ]; then

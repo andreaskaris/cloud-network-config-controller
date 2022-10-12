@@ -7,6 +7,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 
 	cloudnetworkv1 "github.com/openshift/api/cloudnetwork/v1"
 	cloudnetworkclientset "github.com/openshift/client-go/cloudnetwork/clientset/versioned"
@@ -15,6 +16,8 @@ import (
 	cloudnetworklisters "github.com/openshift/client-go/cloudnetwork/listers/cloudnetwork/v1"
 	cloudprovider "github.com/openshift/cloud-network-config-controller/pkg/cloudprovider"
 	controller "github.com/openshift/cloud-network-config-controller/pkg/controller"
+	"github.com/openshift/cloud-network-config-controller/pkg/ipaddressmonitor"
+	"github.com/vishvananda/netlink"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -26,7 +29,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 var (
@@ -57,9 +59,11 @@ type CloudPrivateIPAddressController struct {
 	// controllerContext is the passed-down global context. It's used and passed
 	// down to all API client calls as to make sure all in-flight calls get
 	// cancelled if the main context is
-	ctx           context.Context
-	nodeName      string
-	interfaceName string
+	ctx              context.Context
+	nodeName         string
+	interfaceName    string
+	addressLock      sync.Mutex
+	ipAddressMonitor *ipaddressmonitor.IPAddressMonitor
 }
 
 // NewCloudPrivateIPAddressController returns a new CloudPrivateIPConfig controller
@@ -68,6 +72,7 @@ func NewCloudPrivateIPAddressController(
 	cloudNetworkClientset cloudnetworkclientset.Interface,
 	cloudPrivateIPConfigInformer cloudnetworkinformers.CloudPrivateIPConfigInformer,
 	nodeInformer coreinformers.NodeInformer,
+	ipAddressMonitor *ipaddressmonitor.IPAddressMonitor,
 	nodeName, interfaceName string) *controller.CloudNetworkConfigController {
 
 	utilruntime.Must(cloudnetworkscheme.AddToScheme(scheme.Scheme))
@@ -79,7 +84,9 @@ func NewCloudPrivateIPAddressController(
 		ctx:                        controllerContext,
 		nodeName:                   nodeName,
 		interfaceName:              interfaceName,
+		ipAddressMonitor:           ipAddressMonitor,
 	}
+
 	controller := controller.NewCloudNetworkConfigController(
 		[]cache.InformerSynced{cloudPrivateIPConfigInformer.Informer().HasSynced, nodeInformer.Informer().HasSynced},
 		cloudPrivateIPAddressController,
@@ -113,28 +120,115 @@ func (c *CloudPrivateIPAddressController) SyncHandler(key string) error {
 		return err
 	}
 	// When syncing objects which have been completely deleted: we must make
-	// sure to not continue processing the object.
+	// sure to not continue processing the object - also absolutely make sure that the IP was deleted
+	// from the node.
 	if cloudPrivateIPConfig == nil {
+		ip := cloudPrivateIPConfigNameToIP(key)
+		// If we get an IsNotFound error, then make sure to remove the CloudPrivateIPConfig from
+		// this node.
+		if err := c.removeIPAddressMonitor(ip.String()); err != nil {
+			return err
+		}
+		if err := c.removeIPAddress(ip.String()); err != nil {
+			return err
+		}
 		return nil
 	}
 
-	// ip := cloudPrivateIPConfigNameToIP(cloudPrivateIPConfig.Name)
-
-	// At most one of nodeToAdd or nodeToDel will be set
-	_, nodeToDel := c.computeOp(cloudPrivateIPConfig)
-	if nodeToDel != "" {
-		klog.Infof("CloudPrivateIPAddress: %q might be deleted from node: %q", key, c.nodeName)
-		klog.Infof("Deleted IP address from node: %q for CloudPrivateIPConfig: %q", c.nodeName, key)
-		return nil
-	}
-
+	// If the CloudPrivateIPConfig was found, then we need to add it to the target node.
+	// Any other node shall not have it, so delete it if it's attached to the node.
+	// Convert the key to an IP address.
+	ip := cloudPrivateIPConfigNameToIP(cloudPrivateIPConfig.Name)
 	if cloudPrivateIPConfig.Status.Node == c.nodeName {
-		klog.Infof("CloudPrivateIPAddress: %q will be added to node: %q", c.nodeName)
+		if err := c.addIPAddress(ip.String()); err != nil {
+			return err
+		}
+		if err := c.addIPAddressMonitor(ip.String()); err != nil {
+			return err
+		}
 	} else {
-		klog.Infof("CloudPrivateIPAddress: %q might be deleted from node: %q", key, c.nodeName)
+		if err := c.removeIPAddressMonitor(ip.String()); err != nil {
+			return err
+		}
+		if err := c.removeIPAddress(ip.String()); err != nil {
+			return err
+		}
 	}
 
-	return err
+	return nil
+}
+
+func (c *CloudPrivateIPAddressController) addIPAddressMonitor(ip string) error {
+	return c.ipAddressMonitor.Add(ip)
+}
+
+func (c *CloudPrivateIPAddressController) removeIPAddressMonitor(ip string) error {
+	return c.ipAddressMonitor.Remove(ip)
+}
+
+func (c *CloudPrivateIPAddressController) addIPAddress(ip string) error {
+	c.addressLock.Lock()
+	defer c.addressLock.Unlock()
+
+	hasAddr, err := c.hadAddress(ip)
+	if err != nil {
+		return err
+	}
+	if hasAddr {
+		return nil
+	}
+
+	klog.Infof("CloudPrivateIPAddress %q will be added to node: %q", ip, c.nodeName)
+	intf, err := netlink.LinkByName(c.interfaceName)
+	if err != nil {
+		return err
+	}
+	addr, err := netlink.ParseAddr(fmt.Sprintf(ip + "/32"))
+	if err != nil {
+		return err
+	}
+	return netlink.AddrAdd(intf, addr)
+}
+
+func (c *CloudPrivateIPAddressController) removeIPAddress(ip string) error {
+	c.addressLock.Lock()
+	defer c.addressLock.Unlock()
+
+	hasAddr, err := c.hadAddress(ip)
+	if err != nil {
+		return err
+	}
+	if !hasAddr {
+		return nil
+	}
+
+	klog.Infof("CloudPrivateIPAddress %q will be deleted from node: %q", ip, c.nodeName)
+	intf, err := netlink.LinkByName(c.interfaceName)
+	if err != nil {
+		return err
+	}
+	addr, err := netlink.ParseAddr(fmt.Sprintf(ip + "/32"))
+	if err != nil {
+		return err
+	}
+	return netlink.AddrDel(intf, addr)
+}
+
+func (c *CloudPrivateIPAddressController) hadAddress(ip string) (bool, error) {
+	intf, err := netlink.LinkByName(c.interfaceName)
+	if err != nil {
+		return false, err
+	}
+	addrList, err := netlink.AddrList(intf, netlink.FAMILY_ALL)
+	if err != nil {
+		return false, err
+	}
+	for _, a := range addrList {
+		if a.IP.String() == ip {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // updateCloudPrivateIPConfigStatus copies and updates the provided object and returns
@@ -205,25 +299,6 @@ func (c *CloudPrivateIPAddressController) getCloudPrivateIPConfig(name string) (
 		return nil, err
 	}
 	return cloudPrivateIPConfig, nil
-}
-
-// computeOp decides on what needs to be done given the state of the object.
-func (c *CloudPrivateIPAddressController) computeOp(cloudPrivateIPConfig *cloudnetworkv1.CloudPrivateIPConfig) (string, string) {
-	// Delete if the deletion timestamp is set and we still have our finalizer listed
-	if !cloudPrivateIPConfig.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(cloudPrivateIPConfig, cloudPrivateIPConfigFinalizer) {
-		return "", cloudPrivateIPConfig.Status.Node
-	}
-	// If status and spec are different, delete the current object; we'll add it back with
-	// the updated value in the next sync.
-	if cloudPrivateIPConfig.Spec.Node != cloudPrivateIPConfig.Status.Node && cloudPrivateIPConfig.Status.Node != "" {
-		return "", cloudPrivateIPConfig.Status.Node
-	}
-	// Add if the status is un-assigned or if the status is marked failed
-	if cloudPrivateIPConfig.Status.Node == "" || cloudPrivateIPConfig.Status.Conditions[0].Status != metav1.ConditionTrue {
-		return cloudPrivateIPConfig.Spec.Node, ""
-	}
-	// Default to NOOP
-	return "", ""
 }
 
 // cloudPrivateIPConfigNameToIP converts the resource name to net.IP. Given a

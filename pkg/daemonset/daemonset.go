@@ -12,7 +12,7 @@ func ControlPlaneDaemonSet(name, namespace, image string) *applyv1.DaemonSetAppl
 	container := applycorev1.ContainerApplyConfiguration{
 		Name:    &name,
 		Image:   &image,
-		Command: []string{"sleep", "infinity"},
+		Command: []string{"/usr/bin/cloud-network-config-probe-server"},
 		Env: []applycorev1.EnvVarApplyConfiguration{
 			{
 				Name: pointer.String("NODE_NAME"),
@@ -24,7 +24,7 @@ func ControlPlaneDaemonSet(name, namespace, image string) *applyv1.DaemonSetAppl
 			},
 			{
 				Name:  pointer.String("CONTROLLER_NAME"),
-				Value: pointer.String("cloud-network-config-grpc-server"),
+				Value: pointer.String("cloud-network-config-probe-server"),
 			},
 			{
 				Name:  pointer.String("CONTROLLER_INTERFACE"),
@@ -63,8 +63,9 @@ func ControlPlaneDaemonSet(name, namespace, image string) *applyv1.DaemonSetAppl
 					},
 				},
 				Spec: &applycorev1.PodSpecApplyConfiguration{
-					Containers: []applycorev1.ContainerApplyConfiguration{container},
-					//					HostNetwork: pointer.Bool(true),
+					Containers:         []applycorev1.ContainerApplyConfiguration{container},
+					ServiceAccountName: pointer.String("cloud-network-config-controller"),
+					HostNetwork:        pointer.Bool(true),
 					Affinity: &applycorev1.AffinityApplyConfiguration{
 						NodeAffinity: &applycorev1.NodeAffinityApplyConfiguration{
 							RequiredDuringSchedulingIgnoredDuringExecution: &applycorev1.NodeSelectorApplyConfiguration{
@@ -75,6 +76,10 @@ func ControlPlaneDaemonSet(name, namespace, image string) *applyv1.DaemonSetAppl
 												Key:      pointer.String("node-role.kubernetes.io/control-plane"),
 												Operator: &nodeSelector,
 											},
+										},
+									},
+									{
+										MatchExpressions: []applycorev1.NodeSelectorRequirementApplyConfiguration{
 											{
 												Key:      pointer.String("node-role.kubernetes.io/master"),
 												Operator: &nodeSelector,
@@ -101,6 +106,11 @@ func WorkerDaemonSet(name, namespace, image string) *applyv1.DaemonSetApplyConfi
 		Name:    &name,
 		Image:   &image,
 		Command: []string{"/usr/bin/cloud-network-config-address-controller"},
+		SecurityContext: &applycorev1.SecurityContextApplyConfiguration{
+			Capabilities: &applycorev1.CapabilitiesApplyConfiguration{
+				Add: []corev1.Capability{"NET_ADMIN"},
+			},
+		},
 		Env: []applycorev1.EnvVarApplyConfiguration{
 			{
 				Name: pointer.String("NODE_NAME"),
@@ -149,8 +159,8 @@ func WorkerDaemonSet(name, namespace, image string) *applyv1.DaemonSetApplyConfi
 					},
 				},
 				Spec: &applycorev1.PodSpecApplyConfiguration{
-					Containers: []applycorev1.ContainerApplyConfiguration{container},
-					//					HostNetwork: pointer.Bool(true),
+					Containers:         []applycorev1.ContainerApplyConfiguration{container},
+					HostNetwork:        pointer.Bool(true),
 					Affinity:           &applycorev1.AffinityApplyConfiguration{},
 					Tolerations:        []applycorev1.TolerationApplyConfiguration{},
 					ServiceAccountName: pointer.String("cloud-network-config-controller"),
